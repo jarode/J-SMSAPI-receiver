@@ -1,0 +1,21 @@
+parameters:
+    level: 'max'
+    paths: [ 'src', 'tests' ]
+    checkFunctionNameCase: true
+    reportUnmatchedIgnoredErrors: true
+    treatPhpDocTypesAsCertain: false
+    parallel:
+        maximumNumberOfProcesses: 4
+    ignoreErrors:
+        -
+            # This project purposefully uses variable constructors and "new static()".
+            identifier: new.static
+        -
+            # We cannot fix PHP 8.4 deprecation errors without removing support for PHP versions <7.1
+            # (but it means this error won't be matched on PHP versoins <8.4)
+            identifier: parameter.implicitlyNullable
+            reportUnmatched: false
+
+includes:
+    - 'vendor/phpstan/phpstan-deprecation-rules/rules.neon'
+    - 'vendor/phpstan/phpstan/conf/bleedingEdge.neon'
