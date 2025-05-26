@@ -192,15 +192,87 @@ try {
     Application::getLog()->error('smsapi.callback.comment_error', ['error' => $e->getMessage(), 'contactId' => $contactId]);
 }
 
-// Szukaj aktywnych leadów powiązanych z numerem
+// ---
+// Statusy leadów i dealów:
+// Dokumentacja: https://helpdesk.bitrix24.com/open/18529390/
+// Leady: STATUS_ID (np. NEW, IN_PROCESS, JUNK, CONVERTED, ...)
+// Deale: STAGE_SEMANTIC_ID (P = Process/w toku, S = Success/wygrany, F = Failure/przegrany)
+// Zalecane: pobierać statusy dynamicznie przez API crm.status.list lub ustalić je w konfiguracji
+// ---
+
+// Przykład dynamicznego pobierania statusów leadów (jeśli chcesz mieć zawsze aktualne):
+// UWAGA: Możesz cache'ować te wartości, by nie robić zapytania przy każdym SMS!
+function getActiveLeadStatusIds($b24Service) {
+    $activeStatusIds = [];
+    try {
+        $result = $b24Service->core->call('crm.status.list', [
+            'filter' => ['ENTITY_ID' => 'STATUS']
+        ]);
+        $resultArr = $result->getResponseData()->getResult();
+        if (is_array($resultArr)) {
+            foreach ($resultArr as $status) {
+                if (isset($status['SEMANTICS']) && $status['SEMANTICS'] === 'P') {
+                    $activeStatusIds[] = $status['STATUS_ID'];
+                }
+            }
+        }
+    } catch (\Throwable $e) {
+        Application::getLog()->error('smsapi.callback.status_list_error', ['error' => $e->getMessage()]);
+    }
+    // Fallback: jeśli nie uda się pobrać, użyj domyślnych
+    if (empty($activeStatusIds)) {
+        $activeStatusIds = ['NEW', 'IN_PROCESS', 'JUNK', 'CONVERTED'];
+    }
+    return $activeStatusIds;
+}
+
+// Pobierz aktywne statusy leadów
+$activeLeadStatusIds = getActiveLeadStatusIds($b24Service);
+
+// Przykład dynamicznego pobierania aktywnych etapów dealów (tylko "w toku")
+function getActiveDealStageIds($b24Service) {
+    $activeStageIds = [];
+    try {
+        // Pobierz wszystkie kategorie dealów
+        $categories = $b24Service->core->call('crm.dealcategory.list', []);
+        $categoriesArr = $categories->getResponseData()->getResult();
+        if (is_array($categoriesArr)) {
+            foreach ($categoriesArr as $category) {
+                $categoryId = $category['ID'];
+                // Pobierz etapy dla danej kategorii
+                $stages = $b24Service->core->call('crm.dealcategory.stage.list', [
+                    'ID' => $categoryId
+                ]);
+                $stagesArr = $stages->getResponseData()->getResult();
+                if (is_array($stagesArr)) {
+                    foreach ($stagesArr as $stage) {
+                        if (isset($stage['SEMANTICS']) && $stage['SEMANTICS'] === 'P') {
+                            $activeStageIds[] = $stage['STATUS_ID'];
+                        }
+                    }
+                }
+            }
+        }
+    } catch (\Throwable $e) {
+        Application::getLog()->error('smsapi.callback.deal_stage_list_error', ['error' => $e->getMessage()]);
+    }
+    // Fallback: jeśli nie uda się pobrać, zwracaj pustą tablicę (wtedy filtrujemy po STAGE_SEMANTIC_ID = 'P')
+    return $activeStageIds;
+}
+
+// Pobierz aktywne etapy dealów
+$activeDealStageIds = getActiveDealStageIds($b24Service);
+
+// Szukaj leadów powiązanych z kontaktem
 try {
     $leads = $b24Service->getCrmScope()->lead()->list(
         ['DATE_CREATE' => 'DESC'],
         [
-            'STATUS_ID' => ['NEW', 'IN_PROCESS', 'JUNK', 'CONVERTED'], // możesz doprecyzować statusy aktywne
-            'PHONE' => $fromNormalized
+            // Używamy dynamicznie pobranych statusów
+            'STATUS_ID' => $activeLeadStatusIds,
+            'CONTACT_ID' => $contactId
         ],
-        ['ID', 'TITLE', 'DATE_CREATE', 'STATUS_ID', 'PHONE'],
+        ['ID', 'TITLE', 'DATE_CREATE', 'STATUS_ID', 'CONTACT_ID'],
         0
     );
     $leadsData = $leads->getLeads();
@@ -210,15 +282,21 @@ try {
     Application::getLog()->error('smsapi.callback.lead_search_error', ['error' => $e->getMessage()]);
 }
 
-// Szukaj aktywnych dealów powiązanych z numerem
+// Szukaj dealów powiązanych z kontaktem
 try {
+    $dealFilter = [
+        'CONTACT_ID' => $contactId
+    ];
+    if (!empty($activeDealStageIds)) {
+        $dealFilter['STAGE_ID'] = $activeDealStageIds;
+    } else {
+        // Fallback: filtruj po SEMANTICS = 'P' (w toku)
+        $dealFilter['STAGE_SEMANTIC_ID'] = 'P';
+    }
     $deals = $b24Service->getCrmScope()->deal()->list(
         ['DATE_CREATE' => 'DESC'],
-        [
-            'STAGE_SEMANTIC_ID' => 'P', // P = Process (w toku)
-            'PHONE' => $fromNormalized
-        ],
-        ['ID', 'TITLE', 'DATE_CREATE', 'STAGE_ID', 'STAGE_SEMANTIC_ID', 'PHONE'],
+        $dealFilter,
+        ['ID', 'TITLE', 'DATE_CREATE', 'STAGE_ID', 'STAGE_SEMANTIC_ID', 'CONTACT_ID'],
         0
     );
     $dealsData = $deals->getDeals();
@@ -228,25 +306,54 @@ try {
     Application::getLog()->error('smsapi.callback.deal_search_error', ['error' => $e->getMessage()]);
 }
 
-// Wybierz najnowszy lead lub deal
+// Wybierz najnowszy lead lub deal, w którym już był SMS od SMSAPI
 $entityType = null;
 $entityId = null;
 $latestDate = null;
-if (!empty($leadsData)) {
-    $lead = $leadsData[0];
-    $entityType = 'lead';
-    $entityId = $lead->ID;
-    $latestDate = $lead->DATE_CREATE;
+
+function hasSmsapiComment($b24Service, $entityType, $entityId) {
+    try {
+        $timeline = $b24Service->core->call('crm.timeline.comment.list', [
+            'filter' => [
+                'ENTITY_ID' => $entityId,
+                'ENTITY_TYPE' => $entityType
+            ]
+        ]);
+        $timelineArr = $timeline->getResponseData()->getResult();
+        if (is_array($timelineArr)) {
+            foreach ($timelineArr as $comment) {
+                if (isset($comment['COMMENT']) && strpos($comment['COMMENT'], '[SMSAPI]') !== false) {
+                    return true;
+                }
+            }
+        }
+    } catch (\Throwable $e) {
+        Application::getLog()->error('smsapi.callback.timeline_error', ['error' => $e->getMessage(), 'entityType' => $entityType, 'entityId' => $entityId]);
+    }
+    return false;
 }
-if (!empty($dealsData)) {
-    $deal = $dealsData[0];
-    if ($latestDate === null || strtotime($deal->DATE_CREATE) > strtotime($latestDate)) {
-        $entityType = 'deal';
-        $entityId = $deal->ID;
-        $latestDate = $deal->DATE_CREATE;
+
+// Sprawdź deale
+foreach ($dealsData as $deal) {
+    if (hasSmsapiComment($b24Service, 'deal', $deal->ID)) {
+        if ($latestDate === null || strtotime($deal->DATE_CREATE) > strtotime($latestDate)) {
+            $entityType = 'deal';
+            $entityId = $deal->ID;
+            $latestDate = $deal->DATE_CREATE;
+        }
     }
 }
-// Dodaj komentarz do najnowszego leada/deala (jeśli znaleziono)
+// Sprawdź leady
+foreach ($leadsData as $lead) {
+    if (hasSmsapiComment($b24Service, 'lead', $lead->ID)) {
+        if ($latestDate === null || strtotime($lead->DATE_CREATE) > strtotime($latestDate)) {
+            $entityType = 'lead';
+            $entityId = $lead->ID;
+            $latestDate = $lead->DATE_CREATE;
+        }
+    }
+}
+// Dodaj komentarz do najnowszego leada/deala (jeśli znaleziono taki z SMSAPI)
 if ($entityType && $entityId) {
     try {
         Application::getLog()->info('smsapi.callback.comment_add_attempt', ['entityType' => $entityType, 'entityId' => $entityId, 'message' => $commentText]);
