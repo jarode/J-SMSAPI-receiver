@@ -35,14 +35,10 @@ jobs:
         uses: azure/container-apps-deploy-action@v2
         with:
           appSourcePath: ${{ github.workspace }}
-          _dockerfilePathKey_: _dockerfilePath_
-          registryUrl: 
-          registryUsername: ${{ secrets.JBITRIXWAPP_REGISTRY_USERNAME }}
-          registryPassword: ${{ secrets.JBITRIXWAPP_REGISTRY_PASSWORD }}
+          dockerfilePath: ./Dockerfile
           containerAppName: jbitrixwapp
           resourceGroup: J-Wapp-reciverGroup
-          imageToBuild: default/[parameters('containerAppName')]:${{ github.sha }}
-          _buildArgumentsKey_: |
-            _buildArgumentsValues_
+          containerAppEnvironment: bitrix-env
+          # registryUrl, registryUsername, registryPassword można dodać jeśli używasz własnego rejestru
 
 
