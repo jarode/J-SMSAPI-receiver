@@ -111,8 +111,9 @@ class Application
         switch ($b24Event->getEventCode()) {
             case OnApplicationInstall::CODE:
                 self::getLog()->debug('processRemoteEvents.onApplicationInstall');
-                // save auth tokens and application token under key {domain}_{member_id}
-                $key = sprintf('%s_%s', $b24Event->getAuth()->domain, $b24Event->getAuth()->member_id);
+                // usuń https:// z domeny
+                $domain = preg_replace('#^https?://#', '', $b24Event->getAuth()->domain);
+                $key = sprintf('%s_%s', $domain, $b24Event->getAuth()->member_id);
                 $authData = [
                     $key => [
                         'auth_token' => [
@@ -120,7 +121,7 @@ class Application
                             'refresh_token' => $b24Event->getAuth()->authToken->refreshToken,
                             'expires' => $b24Event->getAuth()->authToken->expires
                         ],
-                        'domain_url' => $b24Event->getAuth()->domain,
+                        'domain_url' => $domain,
                         'application_token' => $b24Event->getAuth()->application_token
                     ]
                 ];
@@ -202,7 +203,8 @@ class Application
 
         // save admin auth token without application_token key
         // they will arrive at OnApplicationInstall event
-        $key = sprintf('%s_%s', $placementRequest->getDomainUrl(), $placementRequest->getRequest()->get('member_id'));
+        $domain = preg_replace('#^https?://#', '', $placementRequest->getDomainUrl());
+        $key = sprintf('%s_%s', $domain, $placementRequest->getRequest()->get('member_id'));
         $authData = [
             $key => [
                 'auth_token' => [
@@ -210,7 +212,7 @@ class Application
                     'refresh_token' => $placementRequest->getAccessToken()->refreshToken,
                     'expires' => $placementRequest->getAccessToken()->expires
                 ],
-                'domain_url' => $placementRequest->getDomainUrl(),
+                'domain_url' => $domain,
                 'application_token' => null
             ]
         ];
@@ -283,7 +285,8 @@ class Application
         ]);
 
         // update renewed auth token in auth.json.local under key {domain}_{member_id}
-        $key = sprintf('%s_%s', $authTokenRenewedEvent->getRenewedToken()->domain, $authTokenRenewedEvent->getRenewedToken()->memberId);
+        $domain = preg_replace('#^https?://#', '', $authTokenRenewedEvent->getRenewedToken()->domain);
+        $key = sprintf('%s_%s', $domain, $authTokenRenewedEvent->getRenewedToken()->memberId);
         $authFileName = __DIR__ . '/../config/auth.json.local';
         if (file_exists($authFileName)) {
             $authData = json_decode(file_get_contents($authFileName), true);
@@ -412,6 +415,7 @@ class Application
      */
     public static function bindNumbersToDomain(array $numbers, string $domain): void
     {
+        $domain = preg_replace('#^https?://#', '', $domain);
         $configFile = dirname(__DIR__) . '/config/config.json.local';
         $config = file_exists($configFile) ? json_decode(file_get_contents($configFile), true) : [];
 

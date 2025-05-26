@@ -1,1 +1,11 @@
-{"auth_token":{"access_token":"dc8433680078d8a90078d8ab000000010000079d183a015c1a0de1068a08fd39087dd0","refresh_token":"cc035b680078d8a90078d8ab000000010000074577cac56efebe3961a4379184d53cc1","expires":1748206812},"domain_url":"b24-yngocx.bitrix24.com","application_token":"7c0ee919e6a83af5ed889b987cf998e5"}
+{
+    "b24-yngocx.bitrix24.com_ae737b07862cbef5cb20f394f99191ee": {
+        "auth_token": {
+            "access_token": "a37234680078d8a90078d8ab00000001f0f1077eb473f907cb62e1ce4ebc5a76dcef1f",
+            "refresh_token": "93f15b680078d8a90078d8ab00000001f0f107a111b5e2ac2ac6216612add106306eb3",
+            "expires": 3600
+        },
+        "domain_url": "b24-yngocx.bitrix24.com",
+        "application_token": null
+    }
+}
