@@ -83,7 +83,21 @@ $auth = json_decode(file_get_contents($authFile), true);
 
 // 3. Stwórz klienta SDK
 try {
-    $b24Service = Application::getB24Service();
+    $authObj = Application::getAuthByPhone($to);
+    if ($authObj === null) {
+        Application::getLog()->error('smsapi.callback.auth_not_found', ['to' => $to, 'domain' => $domain]);
+        http_response_code(500);
+        echo 'Auth not found for this number/domain';
+        exit;
+    }
+    $b24Service = (new ServiceBuilderFactory(
+        Application::getEventDispatcher(),
+        Application::getLog()
+    ))->init(
+        $appProfile,
+        $authObj->getAuthToken(),
+        $authObj->getDomainUrl()
+    );
 } catch (\Throwable $e) {
     Application::getLog()->error('smsapi.callback.b24service_error', ['error' => $e->getMessage()]);
     http_response_code(500);
@@ -174,11 +188,80 @@ try {
         ]
     ]);
     Application::getLog()->info('smsapi.callback.comment_added', ['contactId' => $contactId, 'message' => $commentText]);
-    http_response_code(200);
-    echo 'OK';
 } catch (\Throwable $e) {
     Application::getLog()->error('smsapi.callback.comment_error', ['error' => $e->getMessage(), 'contactId' => $contactId]);
-    http_response_code(500);
-    echo 'Comment add error';
-    exit;
-} 
+}
+
+// Szukaj aktywnych leadów powiązanych z numerem
+try {
+    $leads = $b24Service->getCrmScope()->lead()->list(
+        ['DATE_CREATE' => 'DESC'],
+        [
+            'STATUS_ID' => ['NEW', 'IN_PROCESS', 'JUNK', 'CONVERTED'], // możesz doprecyzować statusy aktywne
+            'PHONE' => $fromNormalized
+        ],
+        ['ID', 'TITLE', 'DATE_CREATE', 'STATUS_ID', 'PHONE'],
+        0
+    );
+    $leadsData = $leads->getLeads();
+    Application::getLog()->info('smsapi.callback.leads_found', ['count' => count($leadsData)]);
+} catch (\Throwable $e) {
+    $leadsData = [];
+    Application::getLog()->error('smsapi.callback.lead_search_error', ['error' => $e->getMessage()]);
+}
+
+// Szukaj aktywnych dealów powiązanych z numerem
+try {
+    $deals = $b24Service->getCrmScope()->deal()->list(
+        ['DATE_CREATE' => 'DESC'],
+        [
+            'STAGE_SEMANTIC_ID' => 'P', // P = Process (w toku)
+            'PHONE' => $fromNormalized
+        ],
+        ['ID', 'TITLE', 'DATE_CREATE', 'STAGE_ID', 'STAGE_SEMANTIC_ID', 'PHONE'],
+        0
+    );
+    $dealsData = $deals->getDeals();
+    Application::getLog()->info('smsapi.callback.deals_found', ['count' => count($dealsData)]);
+} catch (\Throwable $e) {
+    $dealsData = [];
+    Application::getLog()->error('smsapi.callback.deal_search_error', ['error' => $e->getMessage()]);
+}
+
+// Wybierz najnowszy lead lub deal
+$entityType = null;
+$entityId = null;
+$latestDate = null;
+if (!empty($leadsData)) {
+    $lead = $leadsData[0];
+    $entityType = 'lead';
+    $entityId = $lead->ID;
+    $latestDate = $lead->DATE_CREATE;
+}
+if (!empty($dealsData)) {
+    $deal = $dealsData[0];
+    if ($latestDate === null || strtotime($deal->DATE_CREATE) > strtotime($latestDate)) {
+        $entityType = 'deal';
+        $entityId = $deal->ID;
+        $latestDate = $deal->DATE_CREATE;
+    }
+}
+// Dodaj komentarz do najnowszego leada/deala (jeśli znaleziono)
+if ($entityType && $entityId) {
+    try {
+        Application::getLog()->info('smsapi.callback.comment_add_attempt', ['entityType' => $entityType, 'entityId' => $entityId, 'message' => $commentText]);
+        $b24Service->core->call('crm.timeline.comment.add', [
+            'fields' => [
+                'ENTITY_ID' => $entityId,
+                'ENTITY_TYPE' => $entityType,
+                'COMMENT' => $commentText
+            ]
+        ]);
+        Application::getLog()->info('smsapi.callback.comment_added', ['entityType' => $entityType, 'entityId' => $entityId, 'message' => $commentText]);
+    } catch (\Throwable $e) {
+        Application::getLog()->error('smsapi.callback.comment_error', ['error' => $e->getMessage(), 'entityType' => $entityType, 'entityId' => $entityId]);
+    }
+}
+
+http_response_code(200);
+echo 'OK'; 

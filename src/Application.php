@@ -111,15 +111,29 @@ class Application
         switch ($b24Event->getEventCode()) {
             case OnApplicationInstall::CODE:
                 self::getLog()->debug('processRemoteEvents.onApplicationInstall');
-
-                // save auth tokens and application token
-                self::getAuthRepository()->save(
-                    new LocalAppAuth(
-                        $b24Event->getAuth()->authToken,
-                        $b24Event->getAuth()->domain,
-                        $b24Event->getAuth()->application_token
-                    )
-                );
+                // save auth tokens and application token under key {domain}_{member_id}
+                $key = sprintf('%s_%s', $b24Event->getAuth()->domain, $b24Event->getAuth()->member_id);
+                $authData = [
+                    $key => [
+                        'auth_token' => [
+                            'access_token' => $b24Event->getAuth()->authToken->accessToken,
+                            'refresh_token' => $b24Event->getAuth()->authToken->refreshToken,
+                            'expires' => $b24Event->getAuth()->authToken->expires
+                        ],
+                        'domain_url' => $b24Event->getAuth()->domain,
+                        'application_token' => $b24Event->getAuth()->application_token
+                    ]
+                ];
+                // read existing auth data if file exists
+                $authFileName = __DIR__ . '/../config/auth.json.local';
+                if (file_exists($authFileName)) {
+                    $existingData = json_decode(file_get_contents($authFileName), true);
+                    if (is_array($existingData)) {
+                        $authData = array_merge($existingData, $authData);
+                    }
+                }
+                // write updated auth data
+                file_put_contents($authFileName, json_encode($authData, JSON_PRETTY_PRINT));
                 break;
             case 'OTHER_EVENT_CODE':
                 // add your event handler code
@@ -188,13 +202,28 @@ class Application
 
         // save admin auth token without application_token key
         // they will arrive at OnApplicationInstall event
-        self::getAuthRepository()->save(
-            new LocalAppAuth(
-                $placementRequest->getAccessToken(),
-                $placementRequest->getDomainUrl(),
-                null
-            )
-        );
+        $key = sprintf('%s_%s', $placementRequest->getDomainUrl(), $placementRequest->getRequest()->get('member_id'));
+        $authData = [
+            $key => [
+                'auth_token' => [
+                    'access_token' => $placementRequest->getAccessToken()->accessToken,
+                    'refresh_token' => $placementRequest->getAccessToken()->refreshToken,
+                    'expires' => $placementRequest->getAccessToken()->expires
+                ],
+                'domain_url' => $placementRequest->getDomainUrl(),
+                'application_token' => null
+            ]
+        ];
+        // read existing auth data if file exists
+        $authFileName = __DIR__ . '/../config/auth.json.local';
+        if (file_exists($authFileName)) {
+            $existingData = json_decode(file_get_contents($authFileName), true);
+            if (is_array($existingData)) {
+                $authData = array_merge($existingData, $authData);
+            }
+        }
+        // write updated auth data
+        file_put_contents($authFileName, json_encode($authData, JSON_PRETTY_PRINT));
         self::getLog()->debug('processRequest.processOnInstallPlacementRequest.finish');
     }
 
@@ -233,7 +262,7 @@ class Application
      *
      * @return EventDispatcherInterface The event dispatcher instance.
      */
-    protected static function getEventDispatcher(): EventDispatcherInterface
+    public static function getEventDispatcher(): EventDispatcherInterface
     {
         $eventDispatcher = new EventDispatcher();
         $eventDispatcher->addListener(AuthTokenRenewedEvent::class, function (AuthTokenRenewedEvent $authTokenRenewedEvent): void {
@@ -253,8 +282,20 @@ class Application
             'expires' => $authTokenRenewedEvent->getRenewedToken()->authToken->expires
         ]);
 
-        // save renewed auth token
-        self::getAuthRepository()->saveRenewedToken($authTokenRenewedEvent->getRenewedToken());
+        // update renewed auth token in auth.json.local under key {domain}_{member_id}
+        $key = sprintf('%s_%s', $authTokenRenewedEvent->getRenewedToken()->domain, $authTokenRenewedEvent->getRenewedToken()->memberId);
+        $authFileName = __DIR__ . '/../config/auth.json.local';
+        if (file_exists($authFileName)) {
+            $authData = json_decode(file_get_contents($authFileName), true);
+            if (is_array($authData) && isset($authData[$key])) {
+                $authData[$key]['auth_token'] = [
+                    'access_token' => $authTokenRenewedEvent->getRenewedToken()->authToken->accessToken,
+                    'refresh_token' => $authTokenRenewedEvent->getRenewedToken()->authToken->refreshToken,
+                    'expires' => $authTokenRenewedEvent->getRenewedToken()->authToken->expires
+                ];
+                file_put_contents($authFileName, json_encode($authData, JSON_PRETTY_PRINT));
+            }
+        }
 
         self::getLog()->debug('onAuthTokenRenewedEventListener.finish');
     }
@@ -382,5 +423,55 @@ class Application
             }
         }
         file_put_contents($configFile, json_encode($config, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+    }
+
+    /**
+     * Pobiera dane autoryzacyjne na podstawie numeru telefonu.
+     * 
+     * @param string $phone Numer telefonu
+     * @return LocalAppAuth|null Obiekt LocalAppAuth lub null, jeśli nie znaleziono wpisu
+     */
+    public static function getAuthByPhone(string $phone): ?LocalAppAuth
+    {
+        $configFile = dirname(__DIR__) . '/config/config.json.local';
+        if (!file_exists($configFile)) {
+            self::getLog()->warning('getAuthByPhone.configFileNotFound', ['phone' => $phone]);
+            return null;
+        }
+        $config = json_decode(file_get_contents($configFile), true);
+        if (!isset($config[$phone])) {
+            self::getLog()->warning('getAuthByPhone.domainNotFound', ['phone' => $phone]);
+            return null;
+        }
+        $domain = $config[$phone];
+        $authFile = dirname(__DIR__) . '/config/auth.json.local';
+        if (!file_exists($authFile)) {
+            self::getLog()->warning('getAuthByPhone.authFileNotFound', ['phone' => $phone, 'domain' => $domain]);
+            return null;
+        }
+        $authData = json_decode(file_get_contents($authFile), true);
+        if (!is_array($authData)) {
+            self::getLog()->error('getAuthByPhone.authDataNotArray', ['authData' => $authData]);
+            return null;
+        }
+        // Szukamy wpisu, gdzie domain_url pasuje do domeny z config.json.local
+        foreach ($authData as $key => $data) {
+            if (!is_array($data) || !isset($data['domain_url'])) {
+                continue; // pomiń jeśli nie jest tablicą lub nie ma klucza domain_url
+            }
+            if ($data['domain_url'] === $domain) {
+                return new LocalAppAuth(
+                    new \Bitrix24\SDK\Core\Credentials\AuthToken(
+                        $data['auth_token']['access_token'],
+                        $data['auth_token']['refresh_token'],
+                        $data['auth_token']['expires']
+                    ),
+                    $data['domain_url'],
+                    $data['application_token']
+                );
+            }
+        }
+        self::getLog()->warning('getAuthByPhone.authNotFound', ['phone' => $phone, 'domain' => $domain]);
+        return null;
     }
 }
