@@ -68,7 +68,7 @@ $config = file_exists($configFile) ? json_decode(file_get_contents($configFile),
         <table>
             <tr><th>Numer SMSAPI</th><th>Domena Bitrix24</th></tr>
             <?php foreach ($config as $num => $dom): ?>
-                <tr><td><?= htmlspecialchars($num) ?></td><td><?= htmlspecialchars($dom) ?></td></tr>
+                <tr><td><?= htmlspecialchars((string)$num) ?></td><td><?= htmlspecialchars($dom) ?></td></tr>
             <?php endforeach; ?>
         </table>
     <?php else: ?>
