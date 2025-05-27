@@ -3,8 +3,8 @@ FROM php:8.2-apache
 
 # Instalacja wymaganych rozszerzeń i narzędzi
 RUN apt-get update \
-    && apt-get install -y git unzip libzip-dev libcurl4-openssl-dev \
-    && docker-php-ext-install zip curl
+    && apt-get install -y git unzip libzip-dev libcurl4-openssl-dev libicu-dev zlib1g-dev \
+    && docker-php-ext-install zip curl intl bcmath
 
 # Instalacja Composera (oficjalny sposób, bezpieczny i szybki)
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
