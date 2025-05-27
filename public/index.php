@@ -37,6 +37,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['numbers']) && $domain
 // Wczytaj aktualną konfigurację
 $config = file_exists($configFile) ? json_decode(file_get_contents($configFile), true) : [];
 
+// Filtrowanie powiązań tylko dla bieżącej domeny
+$filteredConfig = [];
+if ($domain && !empty($config)) {
+    foreach ($config as $num => $dom) {
+        if ($dom === $domain) {
+            $filteredConfig[$num] = $dom;
+        }
+    }
+}
+
 ?>
 <!DOCTYPE html>
 <html lang="pl">
@@ -64,13 +74,15 @@ $config = file_exists($configFile) ? json_decode(file_get_contents($configFile),
     </form>
 
     <h3>Aktualne powiązania numerów z domenami:</h3>
-    <?php if (!empty($config)): ?>
+    <?php if ($domain && !empty($filteredConfig)): ?>
         <table>
             <tr><th>Numer SMSAPI</th><th>Domena Bitrix24</th></tr>
-            <?php foreach ($config as $num => $dom): ?>
+            <?php foreach ($filteredConfig as $num => $dom): ?>
                 <tr><td><?= htmlspecialchars((string)$num) ?></td><td><?= htmlspecialchars($dom) ?></td></tr>
             <?php endforeach; ?>
         </table>
+    <?php elseif ($domain): ?>
+        <p>Brak powiązanych numerów dla tej domeny.</p>
     <?php else: ?>
         <p>Brak powiązanych numerów.</p>
     <?php endif; ?>
