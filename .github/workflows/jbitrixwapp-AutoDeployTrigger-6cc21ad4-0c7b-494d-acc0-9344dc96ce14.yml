@@ -1,4 +1,4 @@
-name: Trigger auto deployment for jbitrixwapp
+name: Trigger auto deployment for jbitrixwapp3
 
 # When this action will be executed
 on:
@@ -27,21 +27,21 @@ jobs:
       - name: Azure Login
         uses: azure/login@v1
         with:
-          client-id: ${{ secrets.JBITRIXWAPP_AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.JBITRIXWAPP_AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.JBITRIXWAPP_AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Build and push container image to registry
         uses: azure/container-apps-deploy-action@v2
         with:
           appSourcePath: ${{ github.workspace }}
           dockerfilePath: ./Dockerfile
-          registryUrl: smsapiregistry.azurecr.io
-          registryUsername: ${{ secrets.JBITRIXWAPP_REGISTRY_USERNAME }}
-          registryPassword: ${{ secrets.JBITRIXWAPP_REGISTRY_PASSWORD }}
-          imageToBuild: smsapiregistry.azurecr.io/smsapi-app:${{ github.sha }}
-          containerAppName: jbitrixwapp
-          resourceGroup: smsapi-prod
-          containerAppEnvironment: smsapi-env
+          registryUrl: smsapiregistry2.azurecr.io
+          registryUsername: ${{ secrets.REGISTRY_USERNAME }}
+          registryPassword: ${{ secrets.REGISTRY_PASSWORD }}
+          imageToBuild: smsapiregistry2.azurecr.io/smsapi-app:${{ github.sha }},smsapiregistry2.azurecr.io/smsapi-app:latest
+          containerAppName: jbitrixwapp3
+          resourceGroup: smsapi-prod2
+          containerAppEnvironment: smsapi-env2
 
 
