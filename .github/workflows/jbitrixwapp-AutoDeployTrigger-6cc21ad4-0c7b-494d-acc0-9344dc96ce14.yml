@@ -36,9 +36,12 @@ jobs:
         with:
           appSourcePath: ${{ github.workspace }}
           dockerfilePath: ./Dockerfile
+          registryUrl: smsapiregistry.azurecr.io
+          registryUsername: ${{ secrets.JBITRIXWAPP_REGISTRY_USERNAME }}
+          registryPassword: ${{ secrets.JBITRIXWAPP_REGISTRY_PASSWORD }}
+          imageToBuild: smsapiregistry.azurecr.io/smsapi-app:${{ github.sha }}
           containerAppName: jbitrixwapp
-          resourceGroup: J-Wapp-reciverGroup
-          containerAppEnvironment: bitrix-env
-          # registryUrl, registryUsername, registryPassword można dodać jeśli używasz własnego rejestru
+          resourceGroup: smsapi-prod
+          containerAppEnvironment: smsapi-env
 
 
