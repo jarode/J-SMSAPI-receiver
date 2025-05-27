@@ -9,4 +9,7 @@ composer.lock
 .env.local
 
 # Plik instrukcji wdrożeniowej (nie commitować!)
-INSTRUKCJA_PROD.md 
+INSTRUKCJA_PROD.md
+
+# Plik checklisty bezpieczeństwa (nie commitować!)
+SECURITY_CHECKLIST.md 
