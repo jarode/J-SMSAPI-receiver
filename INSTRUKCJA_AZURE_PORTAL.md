@@ -67,7 +67,39 @@
    - **Quota:** `5` GB
 7. **Weryfikacja:** Sprawdź, czy oba File Shares są dostępne
 
----
+
+## 7. Utwórz Container App
+1. W Resource Group kliknij "Create"
+2. Wyszukaj "Container App"
+3. Kliknij "Create"
+4. Wypełnij:
+   - **Name:** `jbitrixwapp3`
+   - **Container Apps Environment:**
+     - Jeśli nie masz jeszcze środowiska, kliknij "Create new" – środowisko utworzy się automatycznie.
+     - Jeśli już masz środowisko (`smsapi-env2`), wybierz je z listy.
+   - **Region:** `West Europe`
+5. W sekcji "Container":
+   - **Container Image Source:**
+     - Jeśli nie masz jeszcze własnego obrazu w ACR, wybierz **Docker Hub** i wpisz:
+       - **Image:** `nginx`
+       - **Tag:** `latest`
+     - Jeśli masz już własny obraz w ACR, wybierz **Azure Container Registry** i podaj:
+       - **Registry:** `smsapiregistry2.azurecr.io`
+       - **Image:** `smsapi-app`
+       - **Tag:** `latest`
+   - **CPU:** `0.5`
+   - **Memory:** `1.0 Gi`
+6. W sekcji "Ingress":
+   - **Ingress:** Enabled
+   - **Ingress traffic:** Accepting traffic from anywhere
+   - **Ingress type:** HTTP
+   - **Target port:** 80
+7. Kliknij "Review + create" → "Create"
+8. **Weryfikacja:** Sprawdź, czy Container App jest utworzona
+
+**Uwaga:**
+- Jeśli tworzysz Container App po raz pierwszy, środowisko (Container Apps Environment) utworzy się automatycznie.
+- Jeśli nie masz jeszcze własnego obrazu w ACR, użyj publicznego obrazu (np. nginx:latest). Po pierwszym deployu z GitHub Actions obraz zostanie automatycznie nadpisany na Twój.
 
 ## 5. Utwórz Container Apps Environment
 1. W Resource Group kliknij "Create"
@@ -97,26 +129,7 @@
 
 ---
 
-## 7. Utwórz Container App
-1. W Resource Group kliknij "Create"
-2. Wyszukaj "Container App"
-3. Kliknij "Create"
-4. Wypełnij:
-   - **Name:** `jbitrixwapp3`
-   - **Container Apps Environment:** `smsapi-env2`
-   - **Region:** `West Europe`
-5. W sekcji "Container":
-   - **Container Image Source:** `Azure Container Registry`
-   - **Registry:** `smsapiregistry2.azurecr.io`
-   - **Image:** `smsapi-app`
-   - **Tag:** `latest`
-   - **CPU:** `0.5`
-   - **Memory:** `1.0 Gi`
-6. W sekcji "Ingress":
-   - **Ingress:** `External`
-   - **Target Port:** `80`
-7. Kliknij "Review + create" → "Create"
-8. **Weryfikacja:** Sprawdź, czy Container App jest utworzona
+
 
 ---
 
@@ -178,6 +191,46 @@
    - Otwórz URL aplikacji
    - Sprawdź, czy webhooki działają
 
+## 12. Weryfikacja uprawnień i dostępności
+1. Sprawdź dostęp do ACR:
+   - Wejdź w ACR → Access control (IAM)
+   - Upewnij się, że Container App ma rolę "AcrPull"
+   - Sprawdź, czy GitHub Actions ma uprawnienia do push
+
+2. Sprawdź dostęp do File Shares:
+   - Wejdź w Storage Account → Access control (IAM)
+   - Upewnij się, że Container App ma rolę "Storage File Data SMB Share Contributor"
+   - Sprawdź uprawnienia na poziomie File Share:
+     - Kliknij File Share → Access Control
+     - Upewnij się, że Container App ma uprawnienia do odczytu i zapisu
+
+3. Sprawdź dostęp do Environment:
+   - Wejdź w Environment → Access control (IAM)
+   - Upewnij się, że Container App ma rolę "Contributor"
+   - Sprawdź, czy GitHub Actions ma uprawnienia do deploymentu
+
+4. Test zapisu do File Shares:
+   - Wejdź w Container App → Console
+   - Wykonaj komendy:
+     ```bash
+     # Test zapisu do config
+     echo "test" > /var/www/html/config/test.txt
+     cat /var/www/html/config/test.txt
+     
+     # Test zapisu do logów
+     echo "test log" > /var/www/html/var/log/test.log
+     cat /var/www/html/var/log/test.log
+     ```
+   - Sprawdź w Azure Portal, czy pliki pojawiły się w File Shares
+
+5. Sprawdź połączenie z ACR:
+   - Wejdź w Container App → Console
+   - Wykonaj:
+     ```bash
+     # Sprawdź, czy można się zalogować do ACR
+     az acr login --name smsapiregistry2
+     ```
+
 ---
 
 ## Po wdrożeniu
@@ -237,4 +290,13 @@
 4. Jeśli aplikacja nie działa:
    - Sprawdź logi aplikacji
    - Zweryfikuj konfigurację
-   - Sprawdź połączenia z zewnętrznymi serwisami 
+   - Sprawdź połączenia z zewnętrznymi serwisami
+5. Jeśli występują problemy z uprawnieniami:
+   - Sprawdź role w IAM dla każdego komponentu
+   - Upewnij się, że wszystkie komponenty są w tym samym regionie
+   - Sprawdź, czy File Shares są poprawnie skonfigurowane jako SMB
+   - Zweryfikuj, czy Container App ma odpowiednie role do odczytu/zapisu 
+
+## Po pierwszym deployu z GitHub Actions
+- Po wypchnięciu własnego obrazu do ACR przez workflow, Container App automatycznie przełączy się na Twój obraz (`smsapiregistry2.azurecr.io/smsapi-app:latest`).
+- Nie musisz ręcznie zmieniać obrazu w portalu – workflow zrobi to za Ciebie. 
