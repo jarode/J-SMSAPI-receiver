@@ -39,7 +39,8 @@ jobs:
           registryUrl: smsapiregistry2.azurecr.io
           registryUsername: ${{ secrets.REGISTRY_USERNAME }}
           registryPassword: ${{ secrets.REGISTRY_PASSWORD }}
-          imageToBuild: smsapiregistry2.azurecr.io/smsapi-app:${{ github.sha }},smsapiregistry2.azurecr.io/smsapi-app:latest
+          imageToBuild: smsapiregistry2.azurecr.io/smsapi-app:${{ github.sha }}
+          additionalImageTags: latest
           containerAppName: jbitrixwapp3
           resourceGroup: smsapi-prod2
           containerAppEnvironment: smsapi-env2
