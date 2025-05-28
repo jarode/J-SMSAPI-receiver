@@ -6,7 +6,9 @@ composer.phar
 composer.lock
 .phpunit.result.cache
 *.log
+*.local
 .env.local
+*.md
 
 # Plik instrukcji wdrożeniowej (nie commitować!)
 INSTRUKCJA_PROD.md
