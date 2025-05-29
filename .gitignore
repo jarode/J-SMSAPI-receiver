@@ -45,4 +45,10 @@ SECURITY_CHECKLIST.md
 composer.phar
 
 # Inne
-node_modules/ 
+node_modules/
+
+# Narzędzia i pliki binarne
+
+# Dokumentacja (nie trzymać w repo)
+INSTRUKCJA_AZURE_PORTAL.md
+INSTRUKCJA_AZURE_PROD.md 
