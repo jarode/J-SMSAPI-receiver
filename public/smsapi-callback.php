@@ -5,6 +5,14 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
+use Symfony\Component\Dotenv\Dotenv;
+
+// Załaduj zmienne środowiskowe z plików .env i .env.local
+(new Dotenv())->load(
+    __DIR__ . '/../config/.env',
+    __DIR__ . '/../config/.env.local'
+);
+
 use Bitrix24\SDK\Core\Credentials\ApplicationProfile;
 use Bitrix24\SDK\Services\ServiceBuilderFactory;
 use Bitrix24\SDK\Core\Credentials\OAuth2\OAuth2Token;
@@ -32,11 +40,8 @@ function saveTokens($tokens) {
 }
 
 // Dane aplikacji z Bitrix24
-$appProfile = ApplicationProfile::initFromArray([
-    'BITRIX24_PHP_SDK_APPLICATION_CLIENT_ID' => 'app.68333281411f82.84628684',
-    'BITRIX24_PHP_SDK_APPLICATION_CLIENT_SECRET' => 'lp7XcJ8aI5AdeOuQzeXvRYyS91cq5MUeGlb5r1mNEo4Nw9LPVE',
-    'BITRIX24_PHP_SDK_APPLICATION_SCOPE' => 'crm,telephony',
-]);
+use Bitrix24\SDK\Core\Credentials\ApplicationProfile as Bitrix24ApplicationProfile;
+$appProfile = Bitrix24ApplicationProfile::initFromArray($_ENV);
 
 function normalizePhone($phone) {
     return preg_replace('/\\D+/', '', $phone);
