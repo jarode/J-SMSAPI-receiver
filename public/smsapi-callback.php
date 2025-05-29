@@ -5,6 +5,14 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
+use Symfony\Component\Dotenv\Dotenv;
+
+// Załaduj zmienne środowiskowe z plików .env i .env.local
+(new Dotenv())->load(
+    __DIR__ . '/../config/.env',
+    __DIR__ . '/../config/.env.local'
+);
+
 use Bitrix24\SDK\Core\Credentials\ApplicationProfile;
 use Bitrix24\SDK\Services\ServiceBuilderFactory;
 use Bitrix24\SDK\Core\Credentials\OAuth2\OAuth2Token;
@@ -32,11 +40,8 @@ function saveTokens($tokens) {
 }
 
 // Dane aplikacji z Bitrix24
-$appProfile = ApplicationProfile::initFromArray([
-    'BITRIX24_PHP_SDK_APPLICATION_CLIENT_ID' => 'app.68333281411f82.84628684',
-    'BITRIX24_PHP_SDK_APPLICATION_CLIENT_SECRET' => 'lp7XcJ8aI5AdeOuQzeXvRYyS91cq5MUeGlb5r1mNEo4Nw9LPVE',
-    'BITRIX24_PHP_SDK_APPLICATION_SCOPE' => 'crm,telephony',
-]);
+use Bitrix24\SDK\Core\Credentials\ApplicationProfile as Bitrix24ApplicationProfile;
+$appProfile = Bitrix24ApplicationProfile::initFromArray($_ENV);
 
 function normalizePhone($phone) {
     return preg_replace('/\\D+/', '', $phone);
@@ -192,6 +197,127 @@ try {
     Application::getLog()->error('smsapi.callback.comment_error', ['error' => $e->getMessage(), 'contactId' => $contactId]);
 }
 
+// Wybierz najnowszy lead lub deal, w którym już był SMS od SMSAPI
+$entityType = null;
+$entityId = null;
+$latestDate = null;
+
+function hasSmsapiComment($b24Service, $entityType, $entityId) {
+    try {
+        $timeline = $b24Service->core->call('crm.timeline.comment.list', [
+            'filter' => [
+                'ENTITY_ID' => $entityId,
+                'ENTITY_TYPE' => $entityType
+            ]
+        ]);
+        $timelineArr = $timeline->getResponseData()->getResult();
+        if (is_array($timelineArr)) {
+            foreach ($timelineArr as $comment) {
+                if (isset($comment['COMMENT']) && strpos($comment['COMMENT'], '[SMSAPI]') !== false) {
+                    return true;
+                }
+            }
+        }
+    } catch (\Throwable $e) {
+        Application::getLog()->error('smsapi.callback.timeline_error', ['error' => $e->getMessage(), 'entityType' => $entityType, 'entityId' => $entityId]);
+    }
+    return false;
+}
+
+// Sprawdź deale
+foreach ($dealsData as $deal) {
+    if (hasSmsapiComment($b24Service, 'deal', $deal->ID)) {
+        if ($latestDate === null || strtotime($deal->DATE_CREATE) > strtotime($latestDate)) {
+            $entityType = 'deal';
+            $entityId = $deal->ID;
+            $latestDate = $deal->DATE_CREATE;
+        }
+    }
+}
+// Sprawdź leady
+foreach ($leadsData as $lead) {
+    if (hasSmsapiComment($b24Service, 'lead', $lead->ID)) {
+        if ($latestDate === null || strtotime($lead->DATE_CREATE) > strtotime($latestDate)) {
+            $entityType = 'lead';
+            $entityId = $lead->ID;
+            $latestDate = $lead->DATE_CREATE;
+        }
+    }
+}
+
+// Przygotuj link i opis do encji
+$link = '';
+$linkLabel = '';
+if ($entityType && $entityId) {
+    if ($entityType === 'lead') {
+        $link = "https://{$domain}/crm/lead/details/{$entityId}/";
+        $linkLabel = 'Lead';
+    } elseif ($entityType === 'deal') {
+        $link = "https://{$domain}/crm/deal/details/{$entityId}/";
+        $linkLabel = 'Deal';
+    }
+} else {
+    // Jeśli nie ma leada/deala, dodaj link do kontaktu
+    $link = "https://{$domain}/crm/contact/details/{$contactId}/";
+    $linkLabel = 'Kontakt';
+}
+
+// Przygotuj treść powiadomienia
+$notifyMessage = "📩 [SMSAPI] Odebrano SMS\n";
+$notifyMessage .= "Od: $from\n";
+if ($smsDateStr) {
+    $notifyMessage .= "Data: $smsDateStr\n";
+}
+$notifyMessage .= "\n$message\n\n";
+$notifyMessage .= "$linkLabel: $link";
+
+// Wysyłka powiadomienia
+try {
+    $notifyResult = $b24Service->core->call('im.notify', [
+        'to' => $recipientId,
+        'message' => $notifyMessage,
+        'type' => 'SYSTEM'
+    ]);
+    Application::getLog()->info('smsapi.callback.im_notify_result', [
+        'to' => $recipientId,
+        'result' => $notifyResult->getResponseData()->getResult(),
+        'error' => $notifyResult->getResponseData()->getErrorDescription()
+    ]);
+} catch (\Throwable $e) {
+    Application::getLog()->error('smsapi.callback.im_notify_error', ['error' => $e->getMessage(), 'to' => $recipientId]);
+}
+
+// --- DODAJ WYSYŁKĘ WIADOMOŚCI I POWIADOMIENIA DO BITRIX24 CHAT ---
+$imMessage = $commentText;
+if ($link) {
+    $imMessage .= "\n$linkLabel: $link";
+}
+
+// Dodaj logowanie treści wiadomości przed wysyłką
+Application::getLog()->debug('smsapi.callback.im_message_content', ['message' => $imMessage]);
+
+// Walidacja: nie wysyłaj pustej wiadomości
+if (empty(trim($imMessage))) {
+    Application::getLog()->error('smsapi.callback.im_message_empty', ['recipientId' => $recipientId]);
+} else {
+    // Wysyłka do osoby odpowiedzialnej za lead/deal lub kontakt
+    $recipientId = $assignedById;
+    try {
+        $notifyResult = $b24Service->core->call('im.notify', [
+            'to' => $recipientId,
+            'message' => $imMessage,
+            'type' => 'SYSTEM'
+        ]);
+        Application::getLog()->info('smsapi.callback.im_notify_result', [
+            'to' => $recipientId,
+            'result' => $notifyResult->getResponseData()->getResult(),
+            'error' => $notifyResult->getResponseData()->getErrorDescription()
+        ]);
+    } catch (\Throwable $e) {
+        Application::getLog()->error('smsapi.callback.im_notify_error', ['error' => $e->getMessage(), 'to' => $recipientId]);
+    }
+}
+
 // ---
 // Statusy leadów i dealów:
 // Dokumentacja: https://helpdesk.bitrix24.com/open/18529390/
@@ -304,70 +430,6 @@ try {
 } catch (\Throwable $e) {
     $dealsData = [];
     Application::getLog()->error('smsapi.callback.deal_search_error', ['error' => $e->getMessage()]);
-}
-
-// Wybierz najnowszy lead lub deal, w którym już był SMS od SMSAPI
-$entityType = null;
-$entityId = null;
-$latestDate = null;
-
-function hasSmsapiComment($b24Service, $entityType, $entityId) {
-    try {
-        $timeline = $b24Service->core->call('crm.timeline.comment.list', [
-            'filter' => [
-                'ENTITY_ID' => $entityId,
-                'ENTITY_TYPE' => $entityType
-            ]
-        ]);
-        $timelineArr = $timeline->getResponseData()->getResult();
-        if (is_array($timelineArr)) {
-            foreach ($timelineArr as $comment) {
-                if (isset($comment['COMMENT']) && strpos($comment['COMMENT'], '[SMSAPI]') !== false) {
-                    return true;
-                }
-            }
-        }
-    } catch (\Throwable $e) {
-        Application::getLog()->error('smsapi.callback.timeline_error', ['error' => $e->getMessage(), 'entityType' => $entityType, 'entityId' => $entityId]);
-    }
-    return false;
-}
-
-// Sprawdź deale
-foreach ($dealsData as $deal) {
-    if (hasSmsapiComment($b24Service, 'deal', $deal->ID)) {
-        if ($latestDate === null || strtotime($deal->DATE_CREATE) > strtotime($latestDate)) {
-            $entityType = 'deal';
-            $entityId = $deal->ID;
-            $latestDate = $deal->DATE_CREATE;
-        }
-    }
-}
-// Sprawdź leady
-foreach ($leadsData as $lead) {
-    if (hasSmsapiComment($b24Service, 'lead', $lead->ID)) {
-        if ($latestDate === null || strtotime($lead->DATE_CREATE) > strtotime($latestDate)) {
-            $entityType = 'lead';
-            $entityId = $lead->ID;
-            $latestDate = $lead->DATE_CREATE;
-        }
-    }
-}
-// Dodaj komentarz do najnowszego leada/deala (jeśli znaleziono taki z SMSAPI)
-if ($entityType && $entityId) {
-    try {
-        Application::getLog()->info('smsapi.callback.comment_add_attempt', ['entityType' => $entityType, 'entityId' => $entityId, 'message' => $commentText]);
-        $b24Service->core->call('crm.timeline.comment.add', [
-            'fields' => [
-                'ENTITY_ID' => $entityId,
-                'ENTITY_TYPE' => $entityType,
-                'COMMENT' => $commentText
-            ]
-        ]);
-        Application::getLog()->info('smsapi.callback.comment_added', ['entityType' => $entityType, 'entityId' => $entityId, 'message' => $commentText]);
-    } catch (\Throwable $e) {
-        Application::getLog()->error('smsapi.callback.comment_error', ['error' => $e->getMessage(), 'entityType' => $entityType, 'entityId' => $entityId]);
-    }
 }
 
 http_response_code(200);
