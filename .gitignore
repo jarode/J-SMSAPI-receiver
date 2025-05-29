@@ -1,17 +1,48 @@
-/.idea*
-/var/*
-vendor
-config/auth.json
-composer.phar
-composer.lock
-.phpunit.result.cache
+# IDE
+.idea/
+.vscode/
+.DS_Store
+
+# Composer dependencies
+/vendor/
+
+# Logi, cache, pliki tymczasowe
+/var/
 *.log
-*.local
+*.cache
+*.tmp
+*.swp
+
+# Konfiguracje i sekrety
+.env
 .env.local
-*.md
+config/*.local
+config/.env
+config/.env.local
+config/auth.json
+config/auth.json.local
 
-# Plik instrukcji wdrożeniowej (nie commitować!)
+# Testy i narzędzia developerskie
+phpunit.xml
+phpunit.xml.dist
+phpstan.neon
+phpstan.neon.dist
+rector.php
+
+# Pliki tymczasowe i archiwa
+*.zip
+*.tar
+*.gz
+*.rar
+*.7z
+*.bak
+
+# Dokumentacja (jeśli nie chcesz jej w repo)
 INSTRUKCJA_PROD.md
+SECURITY_CHECKLIST.md
 
-# Plik checklisty bezpieczeństwa (nie commitować!)
-SECURITY_CHECKLIST.md 
+# Composer
+composer.phar
+
+# Inne
+node_modules/
