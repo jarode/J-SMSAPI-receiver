@@ -221,108 +221,6 @@ function hasSmsapiComment($b24Service, $entityType, $entityId) {
     return false;
 }
 
-// Sprawdź deale
-foreach ($dealsData as $deal) {
-    if (hasSmsapiComment($b24Service, 'deal', $deal->ID)) {
-        if ($latestDate === null || strtotime($deal->DATE_CREATE) > strtotime($latestDate)) {
-            $entityType = 'deal';
-            $entityId = $deal->ID;
-            $latestDate = $deal->DATE_CREATE;
-        }
-    }
-}
-// Sprawdź leady
-foreach ($leadsData as $lead) {
-    if (hasSmsapiComment($b24Service, 'lead', $lead->ID)) {
-        if ($latestDate === null || strtotime($lead->DATE_CREATE) > strtotime($latestDate)) {
-            $entityType = 'lead';
-            $entityId = $lead->ID;
-            $latestDate = $lead->DATE_CREATE;
-        }
-    }
-}
-
-// Przygotuj link i opis do encji
-$link = '';
-$linkLabel = '';
-if ($entityType && $entityId) {
-    if ($entityType === 'lead') {
-        $link = "https://{$domain}/crm/lead/details/{$entityId}/";
-        $linkLabel = 'Lead';
-    } elseif ($entityType === 'deal') {
-        $link = "https://{$domain}/crm/deal/details/{$entityId}/";
-        $linkLabel = 'Deal';
-    }
-} else {
-    // Jeśli nie ma leada/deala, dodaj link do kontaktu
-    $link = "https://{$domain}/crm/contact/details/{$contactId}/";
-    $linkLabel = 'Kontakt';
-}
-
-// Przygotuj treść powiadomienia
-$notifyMessage = "📩 [SMSAPI] Odebrano SMS\n";
-$notifyMessage .= "Od: $from\n";
-if ($smsDateStr) {
-    $notifyMessage .= "Data: $smsDateStr\n";
-}
-$notifyMessage .= "\n$message\n\n";
-$notifyMessage .= "$linkLabel: $link";
-
-// Wysyłka powiadomienia
-try {
-    $notifyResult = $b24Service->core->call('im.notify', [
-        'to' => $recipientId,
-        'message' => $notifyMessage,
-        'type' => 'SYSTEM'
-    ]);
-    Application::getLog()->info('smsapi.callback.im_notify_result', [
-        'to' => $recipientId,
-        'result' => $notifyResult->getResponseData()->getResult(),
-        'error' => $notifyResult->getResponseData()->getErrorDescription()
-    ]);
-} catch (\Throwable $e) {
-    Application::getLog()->error('smsapi.callback.im_notify_error', ['error' => $e->getMessage(), 'to' => $recipientId]);
-}
-
-// --- DODAJ WYSYŁKĘ WIADOMOŚCI I POWIADOMIENIA DO BITRIX24 CHAT ---
-$imMessage = $commentText;
-if ($link) {
-    $imMessage .= "\n$linkLabel: $link";
-}
-
-// Dodaj logowanie treści wiadomości przed wysyłką
-Application::getLog()->debug('smsapi.callback.im_message_content', ['message' => $imMessage]);
-
-// Walidacja: nie wysyłaj pustej wiadomości
-if (empty(trim($imMessage))) {
-    Application::getLog()->error('smsapi.callback.im_message_empty', ['recipientId' => $recipientId]);
-} else {
-    // Wysyłka do osoby odpowiedzialnej za lead/deal lub kontakt
-    $recipientId = $assignedById;
-    try {
-        $notifyResult = $b24Service->core->call('im.notify', [
-            'to' => $recipientId,
-            'message' => $imMessage,
-            'type' => 'SYSTEM'
-        ]);
-        Application::getLog()->info('smsapi.callback.im_notify_result', [
-            'to' => $recipientId,
-            'result' => $notifyResult->getResponseData()->getResult(),
-            'error' => $notifyResult->getResponseData()->getErrorDescription()
-        ]);
-    } catch (\Throwable $e) {
-        Application::getLog()->error('smsapi.callback.im_notify_error', ['error' => $e->getMessage(), 'to' => $recipientId]);
-    }
-}
-
-// ---
-// Statusy leadów i dealów:
-// Dokumentacja: https://helpdesk.bitrix24.com/open/18529390/
-// Leady: STATUS_ID (np. NEW, IN_PROCESS, JUNK, CONVERTED, ...)
-// Deale: STAGE_SEMANTIC_ID (P = Process/w toku, S = Success/wygrany, F = Failure/przegrany)
-// Zalecane: pobierać statusy dynamicznie przez API crm.status.list lub ustalić je w konfiguracji
-// ---
-
 // Przykład dynamicznego pobierania statusów leadów (jeśli chcesz mieć zawsze aktualne):
 // UWAGA: Możesz cache'ować te wartości, by nie robić zapytania przy każdym SMS!
 function getActiveLeadStatusIds($b24Service) {
@@ -387,6 +285,7 @@ function getActiveDealStageIds($b24Service) {
 $activeDealStageIds = getActiveDealStageIds($b24Service);
 
 // Szukaj leadów powiązanych z kontaktem
+$leadsData = [];
 try {
     $leads = $b24Service->getCrmScope()->lead()->list(
         ['DATE_CREATE' => 'DESC'],
@@ -406,6 +305,7 @@ try {
 }
 
 // Szukaj dealów powiązanych z kontaktem
+$dealsData = [];
 try {
     $dealFilter = [
         'CONTACT_ID' => $contactId
@@ -428,6 +328,116 @@ try {
     $dealsData = [];
     Application::getLog()->error('smsapi.callback.deal_search_error', ['error' => $e->getMessage()]);
 }
+
+// ---
+// Wybierz najnowszy lead lub deal, w którym już był SMS od SMSAPI
+$entityType = null;
+$entityId = null;
+$latestDate = null;
+
+if (!is_array($dealsData)) $dealsData = [];
+foreach ($dealsData as $deal) {
+    if (hasSmsapiComment($b24Service, 'deal', $deal->ID)) {
+        if ($latestDate === null || strtotime($deal->DATE_CREATE) > strtotime($latestDate)) {
+            $entityType = 'deal';
+            $entityId = $deal->ID;
+            $latestDate = $deal->DATE_CREATE;
+        }
+    }
+}
+if (!is_array($leadsData)) $leadsData = [];
+foreach ($leadsData as $lead) {
+    if (hasSmsapiComment($b24Service, 'lead', $lead->ID)) {
+        if ($latestDate === null || strtotime($lead->DATE_CREATE) > strtotime($latestDate)) {
+            $entityType = 'lead';
+            $entityId = $lead->ID;
+            $latestDate = $lead->DATE_CREATE;
+        }
+    }
+}
+
+// Przygotuj link i opis do encji
+$link = '';
+$linkLabel = '';
+if ($entityType && $entityId) {
+    if ($entityType === 'lead') {
+        $link = "https://{$domain}/crm/lead/details/{$entityId}/";
+        $linkLabel = 'Lead';
+    } elseif ($entityType === 'deal') {
+        $link = "https://{$domain}/crm/deal/details/{$entityId}/";
+        $linkLabel = 'Deal';
+    }
+} else {
+    // Jeśli nie ma leada/deala, dodaj link do kontaktu
+    $link = "https://{$domain}/crm/contact/details/{$contactId}/";
+    $linkLabel = 'Kontakt';
+}
+
+// Przygotuj treść powiadomienia
+$notifyMessage = "📩 [SMSAPI] Odebrano SMS\n";
+$notifyMessage .= "Od: $from\n";
+if ($smsDateStr) {
+    $notifyMessage .= "Data: $smsDateStr\n";
+}
+$notifyMessage .= "\n$message\n\n";
+$notifyMessage .= "$linkLabel: $link";
+
+// Ustal recipientId (osoba odpowiedzialna za kontakt)
+$recipientId = $assignedById;
+
+// Wysyłka powiadomienia
+try {
+    $notifyResult = $b24Service->core->call('im.notify', [
+        'to' => $recipientId,
+        'message' => $notifyMessage,
+        'type' => 'SYSTEM'
+    ]);
+    Application::getLog()->info('smsapi.callback.im_notify_result', [
+        'to' => $recipientId,
+        'result' => $notifyResult->getResponseData()->getResult(),
+        'error' => $notifyResult->getResponseData()->getErrorDescription()
+    ]);
+} catch (\Throwable $e) {
+    Application::getLog()->error('smsapi.callback.im_notify_error', ['error' => $e->getMessage(), 'to' => $recipientId]);
+}
+
+// --- DODAJ WYSYŁKĘ WIADOMOŚCI I POWIADOMIENIA DO BITRIX24 CHAT ---
+$imMessage = $commentText;
+if ($link) {
+    $imMessage .= "\n$linkLabel: $link";
+}
+
+// Dodaj logowanie treści wiadomości przed wysyłką
+Application::getLog()->debug('smsapi.callback.im_message_content', ['message' => $imMessage]);
+
+// Walidacja: nie wysyłaj pustej wiadomości
+if (empty(trim($imMessage))) {
+    Application::getLog()->error('smsapi.callback.im_message_empty', ['recipientId' => $recipientId]);
+} else {
+    // Wysyłka do osoby odpowiedzialnej za lead/deal lub kontakt
+    try {
+        $notifyResult = $b24Service->core->call('im.notify', [
+            'to' => $recipientId,
+            'message' => $imMessage,
+            'type' => 'SYSTEM'
+        ]);
+        Application::getLog()->info('smsapi.callback.im_notify_result', [
+            'to' => $recipientId,
+            'result' => $notifyResult->getResponseData()->getResult(),
+            'error' => $notifyResult->getResponseData()->getErrorDescription()
+        ]);
+    } catch (\Throwable $e) {
+        Application::getLog()->error('smsapi.callback.im_notify_error', ['error' => $e->getMessage(), 'to' => $recipientId]);
+    }
+}
+
+// ---
+// Statusy leadów i dealów:
+// Dokumentacja: https://helpdesk.bitrix24.com/open/18529390/
+// Leady: STATUS_ID (np. NEW, IN_PROCESS, JUNK, CONVERTED, ...)
+// Deale: STAGE_SEMANTIC_ID (P = Process/w toku, S = Success/wygrany, F = Failure/przegrany)
+// Zalecane: pobierać statusy dynamicznie przez API crm.status.list lub ustalić je w konfiguracji
+// ---
 
 http_response_code(200);
 echo 'OK'; 
