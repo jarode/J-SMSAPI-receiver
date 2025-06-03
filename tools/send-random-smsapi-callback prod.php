@@ -1,12 +1,14 @@
 <?php
 // tools/send-random-smsapi-callback.php
+$endpoint = 'https://jbitrixwapp3.bluesky-54d82c8a.westeurope.azurecontainerapps.io/smsapi-callback.php';
+//$endpoint = 'https://cb42-185-237-159-163.ngrok-free.app/smsapi-callback.php';
 
-$endpoint = 'https://81ed-185-237-159-163.ngrok-free.app/smsapi-callback.php';
 
 $numbers = [
 
-    '48500100299',
+    //'48500100299',
     //'48500900900',
+    '48664072605'
 ];
 $fromNumbers = [
     '48506502706',
