@@ -402,34 +402,7 @@ try {
 }
 
 // --- DODAJ WYSYŁKĘ WIADOMOŚCI I POWIADOMIENIA DO BITRIX24 CHAT ---
-$imMessage = $commentText;
-if ($link) {
-    $imMessage .= "\n$linkLabel: $link";
-}
-
-// Dodaj logowanie treści wiadomości przed wysyłką
-Application::getLog()->debug('smsapi.callback.im_message_content', ['message' => $imMessage]);
-
-// Walidacja: nie wysyłaj pustej wiadomości
-if (empty(trim($imMessage))) {
-    Application::getLog()->error('smsapi.callback.im_message_empty', ['recipientId' => $recipientId]);
-} else {
-    // Wysyłka do osoby odpowiedzialnej za lead/deal lub kontakt
-    try {
-        $notifyResult = $b24Service->core->call('im.notify', [
-            'to' => $recipientId,
-            'message' => $imMessage,
-            'type' => 'SYSTEM'
-        ]);
-        Application::getLog()->info('smsapi.callback.im_notify_result', [
-            'to' => $recipientId,
-            'result' => $notifyResult->getResponseData()->getResult(),
-            'error' => $notifyResult->getResponseData()->getErrorDescription()
-        ]);
-    } catch (\Throwable $e) {
-        Application::getLog()->error('smsapi.callback.im_notify_error', ['error' => $e->getMessage(), 'to' => $recipientId]);
-    }
-}
+// Usunięto drugie wywołanie im.notify, aby nie było duplikatów powiadomień.
 
 // ---
 // Statusy leadów i dealów:
