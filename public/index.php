@@ -17,6 +17,19 @@ use Symfony\Component\HttpFoundation\Request;
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
+// Wczytaj wersję z pliku VERSION
+$version = trim(file_get_contents(__DIR__ . '/../VERSION'));
+
+// Loguj wersję przy starcie
+Application::getLog()->info('app.version', ['version' => $version]);
+
+// Dodaj endpoint /version
+if ($_SERVER['REQUEST_URI'] === '/version') {
+    header('Content-Type: text/plain');
+    echo $version;
+    exit;
+}
+
 $incomingRequest = Request::createFromGlobals();
 Application::getLog()->debug('index.init', ['request' => $incomingRequest->request->all(), 'query' => $incomingRequest->query->all()]);
 

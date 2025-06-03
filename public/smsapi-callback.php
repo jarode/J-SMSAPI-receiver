@@ -7,11 +7,8 @@ require_once __DIR__ . '/../vendor/autoload.php';
 
 use Symfony\Component\Dotenv\Dotenv;
 
-// Załaduj zmienne środowiskowe z plików .env i .env.local
-(new Dotenv())->load(
-    __DIR__ . '/../config/.env',
-    __DIR__ . '/../config/.env.local'
-);
+// Załaduj zmienne środowiskowe z pliku .env.local (zgodnie z zaleceniami SDK)
+(new Dotenv())->loadEnv(dirname(__DIR__) . '/config/.env.local');
 
 use Bitrix24\SDK\Core\Credentials\ApplicationProfile;
 use Bitrix24\SDK\Services\ServiceBuilderFactory;
