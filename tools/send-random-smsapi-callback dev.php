@@ -1,7 +1,7 @@
 <?php
 // tools/send-random-smsapi-callback.php
 //$endpoint = 'https://jbitrixwapp3.bluesky-54d82c8a.westeurope.azurecontainerapps.io/smsapi-callback.php';
-$endpoint = 'https://cb42-185-237-159-163.ngrok-free.app/smsapi-callback.php';
+$endpoint = 'https://41ef-185-237-159-163.ngrok-free.app/smsapi-callback.php';
 
 
 $numbers = [
@@ -12,8 +12,8 @@ $numbers = [
 ];
 $fromNumbers = [
     '48506502706',
-    //'48500100211',
-    //'48500900900',
+    '48500100211',
+    '48500900900',
 ];
 $messages = [
     'Testowa wiadomość A',
@@ -27,6 +27,9 @@ $messages = [
 $to = $numbers[array_rand($numbers)];
 $from = $fromNumbers[array_rand($fromNumbers)];
 $message = $messages[array_rand($messages)];
+// Dodaj unikalność do każdej wiadomości
+$uniqueSuffix = ' [' . uniqid() . ' ' . date('Y-m-d H:i:s') . ']';
+$message .= $uniqueSuffix;
 $smsDate = time();
 $username = 'testuser@example.com';
 

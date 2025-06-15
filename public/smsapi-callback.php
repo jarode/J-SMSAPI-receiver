@@ -144,9 +144,30 @@ foreach ($variants as $variant) {
 }
 if (empty($contactsData)) {
     Application::getLog()->warning('smsapi.callback.contact_not_found', ['from' => $from, 'variants' => $variants]);
-    http_response_code(404);
-    echo 'Contact not found';
+    
+    // Tworzymy nowy kontakt
+    try {
+        $newContact = $b24Service->getCrmScope()->contact()->add([
+            'NAME' => 'Nowy kontakt',
+            'PHONE' => [
+                ['VALUE' => $from, 'VALUE_TYPE' => 'WORK']
+            ],
+            'COMMENTS' => 'Kontakt utworzony automatycznie po otrzymaniu SMS-a'
+        ]);
+        
+        $contactId = $newContact->getId();
+        Application::getLog()->info('smsapi.callback.contact_created', ['contactId' => $contactId, 'from' => $from]);
+    } catch (\Throwable $e) {
+        Application::getLog()->error('smsapi.callback.contact_creation_error', [
+            'error' => $e->getMessage(),
+            'from' => $from
+        ]);
+        http_response_code(500);
+        echo 'Error creating contact';
     exit;
+    }
+} else {
+    $contactId = $contactsData[0]->ID;
 }
 
 // Pobierz datę SMS (jeśli jest)
@@ -156,40 +177,160 @@ if ($smsDateRaw && is_numeric($smsDateRaw)) {
     $smsDateStr = date('Y-m-d H:i:s', (int)$smsDateRaw);
 }
 
-// Przygotuj treść komentarza w spójnym formacie
-$commentText = "📩 [SMSAPI] Odebrano SMS\n";
-$commentText .= "Od: $from\n";
-if ($smsDateStr) {
-    $commentText .= "Data: $smsDateStr\n";
-}
-$commentText .= "\n$message";
-
-// Przygotuj numer w formacie z plusem
-$fromNormalized = $from;
-if (strpos($fromNormalized, '+') !== 0) {
-    $fromNormalized = '+' . preg_replace('/\D+/', '', $fromNormalized);
-}
-
 // Pobierz ASSIGNED_BY_ID z kontaktu (jeśli istnieje), w przeciwnym razie ustaw domyślne ID (np. 1)
-$assignedById = null;
+$assignedById = 1; // Domyślne ID administratora
+
 if (isset($contactsData[0]->ASSIGNED_BY_ID) && $contactsData[0]->ASSIGNED_BY_ID) {
     $assignedById = $contactsData[0]->ASSIGNED_BY_ID;
 } else {
-    $assignedById = 1; // <- tutaj możesz wpisać swoje ID użytkownika Bitrix24
+    // Pobierz szczegóły kontaktu, aby uzyskać ASSIGNED_BY_ID
+    try {
+        $contactDetails = $b24Service->core->call('crm.contact.get', [
+            'id' => $contactId
+        ]);
+        $contactData = $contactDetails->getResponseData()->getResult();
+        if (isset($contactData['ASSIGNED_BY_ID']) && $contactData['ASSIGNED_BY_ID']) {
+            $assignedById = $contactData['ASSIGNED_BY_ID'];
+        }
+    } catch (\Throwable $e) {
+        Application::getLog()->error('smsapi.callback.contact_details_error', [
+            'error' => $e->getMessage(),
+            'contactId' => $contactId
+        ]);
+    }
 }
 
-// 5. Dodaj komentarz do kontaktu (do pierwszego znalezionego)
-$contactId = $contactsData[0]->ID;
+// Przygotuj treść powiadomienia
+$notifyMessage = "📩 [SMSAPI] Odebrano SMS\n";
+$notifyMessage .= "Od: $from\n";
+if ($smsDateStr) {
+    $notifyMessage .= "Data: $smsDateStr\n";
+}
+$notifyMessage .= "\n$message\n\n";
+$notifyMessage .= "Link do kontaktu: https://{$domain}/crm/contact/details/{$contactId}/";
+
+// Sprawdź czy w ciągu ostatnich 5 minut nie było podobnej wiadomości
+$recentComments = [];
 try {
-    Application::getLog()->info('smsapi.callback.comment_add_attempt', ['contactId' => $contactId, 'message' => $commentText]);
+    $timeline = $b24Service->core->call('crm.timeline.comment.list', [
+        'filter' => [
+            'ENTITY_ID' => $contactId,
+            'ENTITY_TYPE' => 'contact',
+            '>DATE_CREATE' => date('Y-m-d H:i:s', strtotime('-5 minutes'))
+        ]
+    ]);
+    $recentComments = $timeline->getResponseData()->getResult();
+} catch (\Throwable $e) {
+    Application::getLog()->warning('smsapi.callback.recent_comments_check_error', [
+        'error' => $e->getMessage(),
+        'contactId' => $contactId
+    ]);
+}
+
+// Sprawdź czy nie ma duplikatu
+$isDuplicate = false;
+if (is_array($recentComments)) {
+    foreach ($recentComments as $comment) {
+        if (isset($comment['COMMENT']) && 
+            strpos($comment['COMMENT'], '[SMSAPI]') !== false && 
+            strpos($comment['COMMENT'], $message) !== false) {
+            $isDuplicate = true;
+            Application::getLog()->info('smsapi.callback.duplicate_detected', [
+                'contactId' => $contactId,
+                'message' => $message
+            ]);
+            break;
+        }
+    }
+}
+
+try {
+    // Tworzenie nowego czatu dla każdego SMS, tytuł zawiera fragment treści
+    $chatId = null;
+    try {
+        Application::getLog()->info('smsapi.callback.creating_new_chat');
+        $msgPreview = mb_substr($message, 0, 30) . (mb_strlen($message) > 30 ? '...' : '');
+        $chatParams = [
+            'TITLE' => 'SMS od ' . $from . ' (' . date('Y-m-d H:i:s') . ')',
+            'TYPE' => 'C',
+            'USERS' => [$assignedById],
+            'COLOR' => '#2FC6F6',
+            'AVATAR' => 'https://b24-41e6ji.bitrix24.pl/bitrix/tools/public_files/public/smsapi/icon.png'
+        ];
+        $chatResult = $b24Service->core->call('im.chat.add', $chatParams);
+        $chatId = $chatResult->getResponseData()->getResult();
+        Application::getLog()->info('smsapi.callback.chat_created', ['chatId' => $chatId]);
+        // Dodaj logowanie typu i wartości chatId
+        Application::getLog()->info('smsapi.callback.chat_id_type', ['type' => gettype($chatId), 'value' => $chatId]);
+        // Poczekaj sekundę, żeby czat był gotowy
+        sleep(1);
+    } catch (\Throwable $e) {
+        Application::getLog()->error('smsapi.callback.chat_creation_error', ['error' => $e->getMessage()]);
+    }
+    // Wyślij wiadomość do czatu tylko jeśli nie jest duplikatem
+    if ($chatId && !$isDuplicate) {
+        $formattedMessage = "📱 *Nowy SMS*\n\n";
+        $formattedMessage .= "👤 *Od:* `{$from}`\n";
+        if ($smsDateStr) {
+            $formattedMessage .= "🕒 *Data:* `{$smsDateStr}`\n";
+        }
+        $formattedMessage .= "\n💬 *Treść:*\n```\n{$message}\n```\n\n";
+        $formattedMessage .= "🔗 [Otwórz kontakt](https://{$domain}/crm/contact/details/{$contactId}/)";
+        $notifyResult = $b24Service->core->call('im.message.add', [
+            'CHAT_ID' => $chatId,
+            'MESSAGE' => $formattedMessage,
+            'SYSTEM' => 'Y'
+        ]);
+        // Loguj odpowiedź z wysyłki wiadomości
+        Application::getLog()->info('smsapi.callback.im_message_add_response', [
+            'response' => $notifyResult->getResponseData()->getResult()
+        ]);
+        if (isset($result['MESSAGE_ID'])) {
+            Application::getLog()->info('smsapi.callback.im_message_success', [
+                'chatId' => $chatId,
+                'messageId' => $result['MESSAGE_ID']
+            ]);
+            // DODATKOWA WIADOMOŚĆ: sama treść SMS-a
+            $b24Service->core->call('im.message.add', [
+                'CHAT_ID' => $chatId,
+                'MESSAGE' => $message,
+                'SYSTEM' => 'Y'
+            ]);
+            // Loguj odpowiedź z wysyłki drugiej wiadomości
+            Application::getLog()->info('smsapi.callback.im_message_add_response_plain', [
+                'response' => $notifyResult->getResponseData()->getResult()
+            ]);
+        } else {
+            Application::getLog()->warning('smsapi.callback.im_message_failed', [
+                'chatId' => $chatId,
+                'result' => $result
+            ]);
+        }
+    } else if ($isDuplicate) {
+        Application::getLog()->info('smsapi.callback.skipping_chat_message', [
+            'reason' => 'duplicate_message'
+        ]);
+    } else {
+        Application::getLog()->error('smsapi.callback.no_chat_id_available');
+    }
+} catch (\Throwable $e) {
+    Application::getLog()->error('smsapi.callback.im_message_error', [
+        'error' => $e->getMessage(),
+        'trace' => $e->getTraceAsString()
+    ]);
+}
+
+// Dodaj komentarz do kontaktu
+try {
+    Application::getLog()->info('smsapi.callback.comment_add_attempt', ['contactId' => $contactId, 'message' => $notifyMessage]);
     $b24Service->core->call('crm.timeline.comment.add', [
         'fields' => [
             'ENTITY_ID' => $contactId,
             'ENTITY_TYPE' => 'contact',
-            'COMMENT' => $commentText
+            'COMMENT' => $notifyMessage
         ]
     ]);
-    Application::getLog()->info('smsapi.callback.comment_added', ['contactId' => $contactId, 'message' => $commentText]);
+    Application::getLog()->info('smsapi.callback.comment_added', ['contactId' => $contactId, 'message' => $notifyMessage]);
 } catch (\Throwable $e) {
     Application::getLog()->error('smsapi.callback.comment_error', ['error' => $e->getMessage(), 'contactId' => $contactId]);
 }
@@ -380,25 +521,192 @@ if ($smsDateStr) {
     $notifyMessage .= "Data: $smsDateStr\n";
 }
 $notifyMessage .= "\n$message\n\n";
-$notifyMessage .= "$linkLabel: $link";
 
-// Ustal recipientId (osoba odpowiedzialna za kontakt)
-$recipientId = $assignedById;
+// Dodaj link do kontaktu/leada/deala
+if ($entityType && $entityId) {
+    if ($entityType === 'lead') {
+        $notifyMessage .= "Link do leada: https://{$domain}/crm/lead/details/{$entityId}/";
+    } elseif ($entityType === 'deal') {
+        $notifyMessage .= "Link do deala: https://{$domain}/crm/deal/details/{$entityId}/";
+    }
+} else {
+    $notifyMessage .= "Link do kontaktu: https://{$domain}/crm/contact/details/{$contactId}/";
+}
 
-// Wysyłka powiadomienia
+// Sprawdź czy w ciągu ostatnich 5 minut nie było podobnej wiadomości
+$recentComments = [];
 try {
-    $notifyResult = $b24Service->core->call('im.notify', [
-        'to' => $recipientId,
-        'message' => $notifyMessage,
-        'type' => 'SYSTEM'
+    $timeline = $b24Service->core->call('crm.timeline.comment.list', [
+        'filter' => [
+            'ENTITY_ID' => $contactId,
+            'ENTITY_TYPE' => 'contact',
+            '>DATE_CREATE' => date('Y-m-d H:i:s', strtotime('-5 minutes'))
+        ]
     ]);
-    Application::getLog()->info('smsapi.callback.im_notify_result', [
-        'to' => $recipientId,
-        'result' => $notifyResult->getResponseData()->getResult(),
-        'error' => $notifyResult->getResponseData()->getErrorDescription()
-    ]);
+    $recentComments = $timeline->getResponseData()->getResult();
 } catch (\Throwable $e) {
-    Application::getLog()->error('smsapi.callback.im_notify_error', ['error' => $e->getMessage(), 'to' => $recipientId]);
+    Application::getLog()->warning('smsapi.callback.recent_comments_check_error', [
+        'error' => $e->getMessage(),
+        'contactId' => $contactId
+    ]);
+}
+
+// Sprawdź czy nie ma duplikatu
+$isDuplicate = false;
+if (is_array($recentComments)) {
+    foreach ($recentComments as $comment) {
+        if (isset($comment['COMMENT']) && 
+            strpos($comment['COMMENT'], '[SMSAPI]') !== false && 
+            strpos($comment['COMMENT'], $message) !== false) {
+            $isDuplicate = true;
+            Application::getLog()->info('smsapi.callback.duplicate_detected', [
+                'contactId' => $contactId,
+                'message' => $message
+            ]);
+            break;
+        }
+    }
+}
+
+// Wysyłka powiadomienia tylko jeśli nie jest duplikatem
+if (!$isDuplicate) {
+    try {
+        // Najpierw spróbuj znaleźć istniejący czat SMS
+        $chatId = null;
+        try {
+            $chatResult = $b24Service->core->call('im.chat.get', [
+                'CHAT_ID' => 'sms_notifications',
+                'USER_ID' => $assignedById
+            ]);
+            $chatData = $chatResult->getResponseData()->getResult();
+            if (isset($chatData['CHAT_ID'])) {
+                $chatId = $chatData['CHAT_ID'];
+                Application::getLog()->info('smsapi.callback.existing_chat_found', [
+                    'chatId' => $chatId
+                ]);
+            }
+        } catch (\Throwable $e) {
+            Application::getLog()->info('smsapi.callback.chat_not_found', [
+                'error' => $e->getMessage()
+            ]);
+        }
+        
+        // Jeśli czat nie istnieje, utwórz nowy
+        if (!$chatId) {
+            try {
+                Application::getLog()->info('smsapi.callback.creating_new_chat');
+                
+                // Pobierz wszystkich użytkowników
+                $usersResult = $b24Service->core->call('user.get', [
+                    'FILTER' => ['ACTIVE' => 'Y']
+                ]);
+                $users = $usersResult->getResponseData()->getResult();
+                $userIds = array_map(function($user) {
+                    return $user['ID'];
+                }, $users);
+                
+                // Tworzenie czatu
+                $chatParams = [
+                    'TITLE' => 'SMS Notifications',
+                    'TYPE' => 'C',
+                    'USERS' => $userIds,
+                    'CHAT_ID' => 'sms_notifications',
+                    'COLOR' => '#2FC6F6', // Kolor czatu
+                    'AVATAR' => 'https://b24-41e6ji.bitrix24.pl/bitrix/tools/public_files/public/smsapi/icon.png'
+                ];
+                $chatResult = $b24Service->core->call('im.chat.add', $chatParams);
+                $chatId = $chatResult->getResponseData()->getResult();
+                Application::getLog()->info('smsapi.callback.chat_created', ['chatId' => $chatId]);
+            } catch (\Throwable $e) {
+                Application::getLog()->error('smsapi.callback.chat_creation_error', ['error' => $e->getMessage()]);
+            }
+        }
+        
+        if ($chatId) {
+            // Przygotuj treść wiadomości z lepszym formatowaniem
+            $formattedMessage = "📱 *Nowy SMS*\n\n";
+            $formattedMessage .= "👤 *Od:* `{$from}`\n";
+            if ($smsDateStr) {
+                $formattedMessage .= "🕒 *Data:* `{$smsDateStr}`\n";
+            }
+            $formattedMessage .= "\n💬 *Treść:*\n```\n{$message}\n```\n\n";
+            
+            // Dodaj link do kontaktu/leada/deala
+            if ($entityType && $entityId) {
+                if ($entityType === 'lead') {
+                    $formattedMessage .= "🔗 [Otwórz lead](https://{$domain}/crm/lead/details/{$entityId}/)";
+                } elseif ($entityType === 'deal') {
+                    $formattedMessage .= "🔗 [Otwórz deal](https://{$domain}/crm/deal/details/{$entityId}/)";
+                }
+            } else {
+                $formattedMessage .= "🔗 [Otwórz kontakt](https://{$domain}/crm/contact/details/{$contactId}/)";
+            }
+            
+            // Wyślij wiadomość do czatu
+            $notifyResult = $b24Service->core->call('im.message.add', [
+                'CHAT_ID' => $chatId,
+                'MESSAGE' => $formattedMessage,
+                'SYSTEM' => 'Y'
+            ]);
+            
+            // Sprawdź czy powiadomienie zostało wysłane poprawnie
+            $result = $notifyResult->getResponseData()->getResult();
+            if (isset($result['MESSAGE_ID'])) {
+                Application::getLog()->info('smsapi.callback.im_message_success', [
+                    'chatId' => $chatId,
+                    'messageId' => $result['MESSAGE_ID']
+                ]);
+                // DODATKOWA WIADOMOŚĆ: sama treść SMS-a
+                $b24Service->core->call('im.message.add', [
+                    'CHAT_ID' => $chatId,
+                    'MESSAGE' => $message,
+                    'SYSTEM' => 'Y'
+                ]);
+            } else {
+                Application::getLog()->warning('smsapi.callback.im_message_failed', [
+                    'chatId' => $chatId,
+                    'result' => $result
+                ]);
+            }
+        } else {
+            Application::getLog()->error('smsapi.callback.no_chat_id_available');
+        }
+    } catch (\Throwable $e) {
+        Application::getLog()->error('smsapi.callback.im_message_error', [
+            'error' => $e->getMessage(),
+            'trace' => $e->getTraceAsString()
+        ]);
+    }
+}
+
+// Dodaj komentarz do leada/deala jeśli istnieje
+if ($entityType && $entityId) {
+    try {
+        Application::getLog()->info('smsapi.callback.entity_comment_add_attempt', [
+            'entityType' => $entityType,
+            'entityId' => $entityId,
+            'message' => $notifyMessage
+        ]);
+        
+        $b24Service->core->call('crm.timeline.comment.add', [
+            'fields' => [
+                'ENTITY_ID' => $entityId,
+                'ENTITY_TYPE' => $entityType,
+                'COMMENT' => $notifyMessage
+            ]
+        ]);
+        
+        Application::getLog()->info('smsapi.callback.entity_comment_added', [
+            'entityType' => $entityType,
+            'entityId' => $entityId
+        ]);
+    } catch (\Throwable $e) {
+        Application::getLog()->error('smsapi.callback.entity_comment_error', [
+            'error' => $e->getMessage(),
+            'entityType' => $entityType,
+            'entityId' => $entityId
+        ]);
+    }
 }
 
 // --- DODAJ WYSYŁKĘ WIADOMOŚCI I POWIADOMIENIA DO BITRIX24 CHAT ---
