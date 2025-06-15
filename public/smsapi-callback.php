@@ -594,29 +594,31 @@ if (!$isDuplicate) {
         // Jeśli czat nie istnieje, utwórz nowy
         if (!$chatId) {
             try {
-                Application::getLog()->info('smsapi.callback.creating_new_chat');
-                
-                // Pobierz wszystkich użytkowników
-                $usersResult = $b24Service->core->call('user.get', [
-                    'FILTER' => ['ACTIVE' => 'Y']
+                Application::getLog()->info('smsapi.callback.creating_new_chat', [
+                    'contactId' => $contactId,
+                    'assignedById' => $assignedById
                 ]);
-                $users = $usersResult->getResponseData()->getResult();
-                $userIds = array_map(function($user) {
-                    return $user['ID'];
-                }, $users);
                 
-                // Tworzenie czatu
                 $chatParams = [
-                    'TITLE' => 'SMS Notifications',
+                    'TITLE' => 'SMS od ' . $from . ' (' . date('Y-m-d H:i:s') . ')',
                     'TYPE' => 'C',
-                    'USERS' => $userIds,
-                    'CHAT_ID' => 'sms_notifications',
-                    'COLOR' => '#2FC6F6', // Kolor czatu
+                    'USERS' => [$assignedById],
+                    'COLOR' => '#2FC6F6',
                     'AVATAR' => 'https://b24-41e6ji.bitrix24.pl/bitrix/tools/public_files/public/smsapi/icon.png'
                 ];
+                Application::getLog()->info('smsapi.callback.chat_params', ['params' => $chatParams]);
+
                 $chatResult = $b24Service->core->call('im.chat.add', $chatParams);
+                Application::getLog()->info('smsapi.callback.chat_add_response', [
+                    'response' => $chatResult->getResponseData()->getResult()
+                ]);
+
                 $chatId = $chatResult->getResponseData()->getResult();
                 Application::getLog()->info('smsapi.callback.chat_created', ['chatId' => $chatId]);
+                // Dodaj logowanie typu i wartości chatId
+                Application::getLog()->info('smsapi.callback.chat_id_type', ['type' => gettype($chatId), 'value' => $chatId]);
+                // Poczekaj sekundę, żeby czat był gotowy
+                sleep(1);
             } catch (\Throwable $e) {
                 Application::getLog()->error('smsapi.callback.chat_creation_error', ['error' => $e->getMessage()]);
             }
@@ -643,6 +645,11 @@ if (!$isDuplicate) {
             }
             
             // Wyślij wiadomość do czatu
+            Application::getLog()->info('smsapi.callback.sending_message', [
+                'chatId' => $chatId,
+                'message' => $formattedMessage
+            ]);
+
             $notifyResult = $b24Service->core->call('im.message.add', [
                 'CHAT_ID' => $chatId,
                 'MESSAGE' => $formattedMessage,
